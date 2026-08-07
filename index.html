@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PokéWallet">
-<link rel="manifest" href="manifest.json?v=1786036253128">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786036253128">
-<link rel="icon" href="icon-192.png?v=1786036253128">
+<link rel="manifest" href="manifest.json?v=1786044598344">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786044598344">
+<link rel="icon" href="icon-192.png?v=1786044598344">
 <style>
 :root {
   --accent: #ffcb05;
@@ -109,6 +109,35 @@ html, body {
 .summary-value { font-size: 20px; font-weight: 700; margin-top: 2px; }
 .summary-value.up, .value-delta.up { color: var(--up); }
 .summary-value.down, .value-delta.down { color: var(--down); }
+
+.stock-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.stock-grid .summary-card { padding: 10px 8px; }
+.stock-grid .summary-value { font-size: 17px; }
+
+.card-row-status {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.flip-status-select { margin-top: 6px; width: auto; padding: 4px 8px; font-size: 12px; }
+
+.alert-title { color: var(--down); }
+.alert-row {
+  border: 1px solid var(--down);
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px rgba(255,92,92,0.15);
+}
+.alert-row .card-row { border-color: transparent; }
 
 .section-title {
   font-size: 14px;
@@ -272,7 +301,7 @@ textarea.text-input { resize: vertical; font-family: inherit; }
 </head>
 <body>
 <div id="boot-splash">
-  <img src="icon-192.png?v=1786036253128" alt="" class="boot-icon">
+  <img src="icon-192.png?v=1786044598344" alt="" class="boot-icon">
   <div class="boot-title">PokéWallet</div>
 </div>
 <div id="root"></div>
@@ -585,10 +614,20 @@ const {
 } = React;
 const LS = {
   cards: "pkw-cards",
-  accent: "pkw-accent"
+  accent: "pkw-accent",
+  alertThreshold: "pkw-alert-threshold"
 };
+const DEFAULT_ALERT_THRESHOLD = 50;
 const ACCENT_PRESETS = ["#ffcb05", "#3b6cff", "#ff5252", "#2ecc71", "#a066ff", "#ff8a3d"];
 const DEFAULT_RESTORATION_TASKS = ["Incollare angoli", "Togliere inchiostro", "Togliere pieghe", "Pulire superficie"];
+const CONDITION_OPTIONS = ["NM", "EX", "GD", "LP", "PL", "PO"];
+const FLIP_STATUS = {
+  DA_RESTAURARE: "Da restaurare",
+  IN_RESTAURO: "In restauro",
+  PRONTA: "Pronta da vendere"
+};
+const FLIP_STATUS_OPTIONS = [FLIP_STATUS.DA_RESTAURARE, FLIP_STATUS.IN_RESTAURO, FLIP_STATUS.PRONTA];
+const SALE_CHANNELS = ["Vinted", "Fiera", "Altro"];
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -650,6 +689,8 @@ function emptyCard() {
     graded: false,
     gradingCompany: "",
     grade: "",
+    condition: "NM",
+    flipStatus: FLIP_STATUS.PRONTA,
     image: "",
     source: "Altro",
     purchasePrice: "",
@@ -751,7 +792,9 @@ function CardRow({
     className: "card-row-name"
   }, card.name || "(senza nome)"), /*#__PURE__*/React.createElement("div", {
     className: "card-row-meta"
-  }, card.set, " · ", card.language, card.graded ? " · " + card.gradingCompany + " " + card.grade : "", card.quantity > 1 ? " · x" + card.quantity : "")), /*#__PURE__*/React.createElement("div", {
+  }, card.set, " · ", card.language, card.graded ? " · " + card.gradingCompany + " " + card.grade : " · " + (card.condition || "NM"), card.quantity > 1 ? " · x" + card.quantity : ""), !card.sold && card.flipStatus && /*#__PURE__*/React.createElement("div", {
+    className: "card-row-status"
+  }, card.flipStatus)), /*#__PURE__*/React.createElement("div", {
     className: "card-row-value"
   }, /*#__PURE__*/React.createElement("div", {
     className: "value-amount"
@@ -762,7 +805,8 @@ function CardRow({
 function HomeScreen({
   cards,
   openCard,
-  setScreen
+  setScreen,
+  alertThreshold
 }) {
   const active = cards.filter(c => !c.sold);
   const totalValue = active.reduce((s, c) => s + currentValue(c) * (c.quantity || 1), 0);
@@ -770,10 +814,22 @@ function HomeScreen({
   const unrealized = totalValue - totalInvested;
   const sold = cards.filter(c => c.sold);
   const realized = sold.reduce((s, c) => s + (c.sold.price - (Number(c.purchasePrice) || 0)) * (c.quantity || 1), 0);
-  const movers = active.map(c => ({
+  const alerts = active.map(c => ({
     c,
     dp: deltaPct(c)
-  })).filter(x => x.dp !== null).sort((a, b) => Math.abs(b.dp) - Math.abs(a.dp)).slice(0, 5);
+  })).filter(x => x.dp !== null && Math.abs(x.dp) >= alertThreshold).sort((a, b) => Math.abs(b.dp) - Math.abs(a.dp));
+  const byStatus = {};
+  FLIP_STATUS_OPTIONS.forEach(s => {
+    byStatus[s] = {
+      count: 0,
+      value: 0
+    };
+  });
+  active.forEach(c => {
+    const s = byStatus[c.flipStatus] || byStatus[FLIP_STATUS.PRONTA];
+    s.count += 1;
+    s.value += (Number(c.purchasePrice) || 0) * (c.quantity || 1);
+  });
   return /*#__PURE__*/React.createElement("div", {
     className: "screen"
   }, /*#__PURE__*/React.createElement("div", {
@@ -802,17 +858,34 @@ function HomeScreen({
     className: "summary-label"
   }, "Profitto realizzato"), /*#__PURE__*/React.createElement("div", {
     className: "summary-value " + (realized >= 0 ? "up" : "down")
-  }, fmtEUR(realized)))), movers.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", {
+  }, fmtEUR(realized)))), /*#__PURE__*/React.createElement("h3", {
     className: "section-title"
-  }, "Variazioni recenti"), /*#__PURE__*/React.createElement("div", {
+  }, "Giacenze"), /*#__PURE__*/React.createElement("div", {
+    className: "stock-grid"
+  }, FLIP_STATUS_OPTIONS.map(s => /*#__PURE__*/React.createElement("div", {
+    className: "summary-card",
+    key: s
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "summary-label"
+  }, s), /*#__PURE__*/React.createElement("div", {
+    className: "summary-value"
+  }, byStatus[s].count), /*#__PURE__*/React.createElement("div", {
+    className: "hint"
+  }, fmtEUR(byStatus[s].value), " investiti")))), alerts.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", {
+    className: "section-title alert-title"
+  }, "⚠️ Allerta prezzo (soglia ", alertThreshold, "%)"), /*#__PURE__*/React.createElement("div", {
     className: "card-list"
-  }, movers.map(({
-    c
-  }) => /*#__PURE__*/React.createElement(CardRow, {
+  }, alerts.map(({
+    c,
+    dp
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "alert-row",
     key: c.id,
+    onClick: () => openCard(c.id)
+  }, /*#__PURE__*/React.createElement(CardRow, {
     card: c,
     onClick: () => openCard(c.id)
-  })))), /*#__PURE__*/React.createElement("h3", {
+  }))))), /*#__PURE__*/React.createElement("h3", {
     className: "section-title"
   }, "Collezione (", active.length, ")"), active.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty-state"
@@ -1034,7 +1107,7 @@ function CardForm({
     type: "checkbox",
     checked: card.graded,
     onChange: e => set("graded", e.target.checked)
-  }), "Carta gradata")), card.graded && /*#__PURE__*/React.createElement("div", {
+  }), "Carta gradata")), card.graded ? /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
@@ -1050,7 +1123,16 @@ function CardForm({
     value: card.grade,
     onChange: e => set("grade", e.target.value),
     placeholder: "9, 10..."
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))) : /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", null, "Condizione"), /*#__PURE__*/React.createElement("select", {
+    className: "text-input",
+    value: card.condition,
+    onChange: e => set("condition", e.target.value)
+  }, CONDITION_OPTIONS.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, c)))), /*#__PURE__*/React.createElement("div", {
     className: "form-row"
   }, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
@@ -1069,6 +1151,8 @@ function CardForm({
     value: card.purchaseDate,
     onChange: e => set("purchaseDate", e.target.value)
   }))), /*#__PURE__*/React.createElement("div", {
+    className: "form-row"
+  }, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", null, "Provenienza"), /*#__PURE__*/React.createElement("select", {
     className: "text-input",
@@ -1077,10 +1161,21 @@ function CardForm({
   }, /*#__PURE__*/React.createElement("option", {
     value: "Vinted"
   }, "Vinted"), /*#__PURE__*/React.createElement("option", {
+    value: "Fiera"
+  }, "Fiera"), /*#__PURE__*/React.createElement("option", {
     value: "Infanzia"
   }, "Infanzia"), /*#__PURE__*/React.createElement("option", {
     value: "Altro"
   }, "Altro"))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", null, "Stato flip"), /*#__PURE__*/React.createElement("select", {
+    className: "text-input",
+    value: card.flipStatus,
+    onChange: e => set("flipStatus", e.target.value)
+  }, FLIP_STATUS_OPTIONS.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s,
+    value: s
+  }, s))))), /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", null, "Note"), /*#__PURE__*/React.createElement("textarea", {
     className: "text-input",
@@ -1202,6 +1297,7 @@ function CardDetail({
   const [saleForm, setSaleForm] = useState(false);
   const [salePrice, setSalePrice] = useState("");
   const [saleDate, setSaleDate] = useState(new Date().toISOString().slice(0, 10));
+  const [saleChannel, setSaleChannel] = useState("Vinted");
   const [newTask, setNewTask] = useState("");
   function addPricePoint(value, source) {
     const point = {
@@ -1224,7 +1320,8 @@ function CardDetail({
       ...card,
       sold: {
         price: Number(salePrice),
-        date: saleDate
+        date: saleDate,
+        channel: saleChannel
       }
     });
     setSaleForm(false);
@@ -1322,11 +1419,21 @@ function CardDetail({
     className: "thumb-placeholder large"
   }, "?")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", null, card.name), /*#__PURE__*/React.createElement("div", {
     className: "hint"
-  }, card.set, " ", card.number ? "· " + card.number : "", " · ", card.language), card.graded && /*#__PURE__*/React.createElement("div", {
+  }, card.set, " ", card.number ? "· " + card.number : "", " · ", card.language), /*#__PURE__*/React.createElement("div", {
     className: "hint"
-  }, card.gradingCompany, " ", card.grade), card.sold && /*#__PURE__*/React.createElement("div", {
+  }, card.graded ? card.gradingCompany + " " + card.grade : "Condizione: " + card.condition), !card.sold && /*#__PURE__*/React.createElement("select", {
+    className: "text-input flip-status-select",
+    value: card.flipStatus,
+    onChange: e => onUpdate({
+      ...card,
+      flipStatus: e.target.value
+    })
+  }, FLIP_STATUS_OPTIONS.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s,
+    value: s
+  }, s))), card.sold && /*#__PURE__*/React.createElement("div", {
     className: "sold-badge"
-  }, "Venduta il ", fmtDate(card.sold.date), " a ", fmtEUR(card.sold.price)))), /*#__PURE__*/React.createElement("div", {
+  }, "Venduta il ", fmtDate(card.sold.date), " a ", fmtEUR(card.sold.price), " (", card.sold.channel || "Altro", ")"))), /*#__PURE__*/React.createElement("div", {
     className: "summary-grid"
   }, /*#__PURE__*/React.createElement("div", {
     className: "summary-card"
@@ -1445,6 +1552,15 @@ function CardDetail({
     value: saleDate,
     onChange: e => setSaleDate(e.target.value)
   })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", null, "Canale di vendita"), /*#__PURE__*/React.createElement("select", {
+    className: "text-input",
+    value: saleChannel,
+    onChange: e => setSaleChannel(e.target.value)
+  }, SALE_CHANNELS.map(ch => /*#__PURE__*/React.createElement("option", {
+    key: ch,
+    value: ch
+  }, ch)))), /*#__PURE__*/React.createElement("div", {
     className: "form-actions"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn-secondary",
@@ -1465,7 +1581,9 @@ function SettingsScreen({
   accent,
   setAccent,
   cards,
-  setCards
+  setCards,
+  alertThreshold,
+  setAlertThreshold
 }) {
   const fileRef = useRef(null);
   const importRef = useRef(null);
@@ -1535,6 +1653,20 @@ function SettingsScreen({
     className: "screen"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "section-title"
+  }, "Soglia allerta prezzo"), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Una carta compare nel banner \"Allerta prezzo\" in home solo se il suo valore sale o scende di almeno questa percentuale rispetto all'ultimo controllo. Variazioni più piccole restano visibili solo nella scheda della singola carta, senza avviso."), /*#__PURE__*/React.createElement("div", {
+    className: "search-row"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    className: "text-input",
+    value: alertThreshold,
+    onChange: e => setAlertThreshold(Math.max(1, Number(e.target.value) || 1))
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "%")), /*#__PURE__*/React.createElement("h3", {
+    className: "section-title"
   }, "Colore accento"), /*#__PURE__*/React.createElement("div", {
     className: "accent-row"
   }, ACCENT_PRESETS.map(c => /*#__PURE__*/React.createElement("button", {
@@ -1584,6 +1716,7 @@ function SettingsScreen({
 function App() {
   const [cards, setCardsState] = useState(loadCards);
   const [accent, setAccentState] = useState(() => localStorage.getItem(LS.accent) || ACCENT_PRESETS[0]);
+  const [alertThreshold, setAlertThresholdState] = useState(() => Number(localStorage.getItem(LS.alertThreshold)) || DEFAULT_ALERT_THRESHOLD);
   const [screen, setScreen] = useState("home");
   const [selectedId, setSelectedId] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -1592,6 +1725,9 @@ function App() {
     localStorage.setItem(LS.accent, accent);
     document.documentElement.style.setProperty("--accent", accent);
   }, [accent]);
+  useEffect(() => {
+    localStorage.setItem(LS.alertThreshold, String(alertThreshold));
+  }, [alertThreshold]);
   function setCards(next) {
     setCardsState(next);
   }
@@ -1650,13 +1786,16 @@ function App() {
       accent: accent,
       setAccent: setAccentState,
       cards: cards,
-      setCards: setCards
+      setCards: setCards,
+      alertThreshold: alertThreshold,
+      setAlertThreshold: setAlertThresholdState
     });
   } else {
     body = /*#__PURE__*/React.createElement(HomeScreen, {
       cards: cards,
       openCard: openCard,
-      setScreen: setScreen
+      setScreen: setScreen,
+      alertThreshold: alertThreshold
     });
   }
   return /*#__PURE__*/React.createElement("div", {
