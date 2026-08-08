@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PokéWallet">
-<link rel="manifest" href="manifest.json?v=1786044598344">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786044598344">
-<link rel="icon" href="icon-192.png?v=1786044598344">
+<link rel="manifest" href="manifest.json?v=1786142582130">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786142582130">
+<link rel="icon" href="icon-192.png?v=1786142582130">
 <style>
 :root {
   --accent: #ffcb05;
@@ -130,6 +130,29 @@ html, body {
 }
 
 .flip-status-select { margin-top: 6px; width: auto; padding: 4px 8px; font-size: 12px; }
+
+.new-title { color: var(--accent); }
+.new-card-box {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.new-card-box .card-row { border: none; padding: 0; cursor: default; }
+.new-card-question { font-size: 13px; color: var(--text-dim); }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+.chip.selected { background: var(--accent); color: #111318; border-color: var(--accent); font-weight: 600; }
 
 .alert-title { color: var(--down); }
 .alert-row {
@@ -301,7 +324,7 @@ textarea.text-input { resize: vertical; font-family: inherit; }
 </head>
 <body>
 <div id="boot-splash">
-  <img src="icon-192.png?v=1786044598344" alt="" class="boot-icon">
+  <img src="icon-192.png?v=1786142582130" alt="" class="boot-icon">
   <div class="boot-title">PokéWallet</div>
 </div>
 <div id="root"></div>
@@ -615,11 +638,82 @@ const {
 const LS = {
   cards: "pkw-cards",
   accent: "pkw-accent",
-  alertThreshold: "pkw-alert-threshold"
+  alertThreshold: "pkw-alert-threshold",
+  githubToken: "pkw-github-token",
+  lastModified: "pkw-last-modified",
+  lastSynced: "pkw-last-synced"
 };
 const DEFAULT_ALERT_THRESHOLD = 50;
+const GITHUB_OWNER = "alexrondi30-cpu";
+const GITHUB_REPO = "pokecollection";
+const GITHUB_PATH = "data.json";
+const GITHUB_API = "https://api.github.com/repos/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/contents/" + GITHUB_PATH;
+function b64EncodeUnicode(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+function b64DecodeUnicode(str) {
+  return decodeURIComponent(escape(atob(str)));
+}
+async function githubFetch(token) {
+  const res = await fetch(GITHUB_API, {
+    headers: {
+      Authorization: "token " + token,
+      Accept: "application/vnd.github+json"
+    }
+  });
+  if (res.status === 404) return {
+    data: null,
+    sha: null
+  };
+  if (!res.ok) throw new Error("Errore GitHub: " + res.status);
+  const json = await res.json();
+  const content = JSON.parse(b64DecodeUnicode(json.content.replace(/\n/g, "")));
+  return {
+    data: content,
+    sha: json.sha
+  };
+}
+async function githubPush(token, payload, sha) {
+  const body = {
+    message: "Sync PokéWallet " + new Date().toISOString(),
+    content: b64EncodeUnicode(JSON.stringify(payload))
+  };
+  if (sha) body.sha = sha;
+  const res = await fetch(GITHUB_API, {
+    method: "PUT",
+    headers: {
+      Authorization: "token " + token,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error("Errore push GitHub: " + res.status + " " + (err.message || ""));
+  }
+  const json = await res.json();
+  return json.content.sha;
+}
 const ACCENT_PRESETS = ["#ffcb05", "#3b6cff", "#ff5252", "#2ecc71", "#a066ff", "#ff8a3d"];
 const DEFAULT_RESTORATION_TASKS = ["Incollare angoli", "Togliere inchiostro", "Togliere pieghe", "Pulire superficie"];
+const DAMAGE_CHIPS = [{
+  key: "scollata",
+  label: "Scollata",
+  task: "Incollare angoli"
+}, {
+  key: "inked",
+  label: "Inked",
+  task: "Togliere inchiostro"
+}, {
+  key: "piega",
+  label: "Piega",
+  task: "Togliere pieghe"
+}, {
+  key: "pulire",
+  label: "Pulire",
+  task: "Pulire superficie"
+}];
 const CONDITION_OPTIONS = ["NM", "EX", "GD", "LP", "PL", "PO"];
 const FLIP_STATUS = {
   DA_RESTAURARE: "Da restaurare",
@@ -698,7 +792,8 @@ function emptyCard() {
     priceHistory: [],
     sold: null,
     restoration: newRestoration(),
-    notes: ""
+    notes: "",
+    isNew: false
   };
 }
 async function searchTcgdex(name) {
@@ -802,13 +897,66 @@ function CardRow({
     className: "value-delta " + (dp >= 0 ? "up" : "down")
   }, dp >= 0 ? "▲" : "▼", " ", Math.abs(dp).toFixed(1), "%")));
 }
+function NewCardReview({
+  card,
+  openCard,
+  onUpdate
+}) {
+  const [selected, setSelected] = useState(() => card.suggestedDamage || []);
+  function toggle(key) {
+    setSelected(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  }
+  function confirm() {
+    if (selected.length === 0) {
+      onUpdate({
+        ...card,
+        isNew: false,
+        flipStatus: FLIP_STATUS.PRONTA
+      });
+      return;
+    }
+    const tasks = DAMAGE_CHIPS.filter(c => selected.includes(c.key)).map(c => ({
+      id: uid(),
+      label: c.task,
+      done: false
+    }));
+    onUpdate({
+      ...card,
+      isNew: false,
+      flipStatus: FLIP_STATUS.DA_RESTAURARE,
+      restoration: {
+        needed: true,
+        tasks
+      }
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "new-card-box"
+  }, /*#__PURE__*/React.createElement(CardRow, {
+    card: card,
+    onClick: () => openCard(card.id)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "new-card-question"
+  }, "Che lavorazioni servono? (nessuna = pronta da vendere)"), /*#__PURE__*/React.createElement("div", {
+    className: "chip-row"
+  }, DAMAGE_CHIPS.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c.key,
+    className: "chip" + (selected.includes(c.key) ? " selected" : ""),
+    onClick: () => toggle(c.key)
+  }, c.label))), /*#__PURE__*/React.createElement("button", {
+    className: "btn-primary full-width",
+    onClick: confirm
+  }, selected.length === 0 ? "Nessuna, pronta da vendere" : "Conferma (" + selected.length + ")"));
+}
 function HomeScreen({
   cards,
   openCard,
   setScreen,
-  alertThreshold
+  alertThreshold,
+  onUpdate
 }) {
   const active = cards.filter(c => !c.sold);
+  const newCards = active.filter(c => c.isNew);
   const totalValue = active.reduce((s, c) => s + currentValue(c) * (c.quantity || 1), 0);
   const totalInvested = active.reduce((s, c) => s + (Number(c.purchasePrice) || 0) * (c.quantity || 1), 0);
   const unrealized = totalValue - totalInvested;
@@ -871,7 +1019,16 @@ function HomeScreen({
     className: "summary-value"
   }, byStatus[s].count), /*#__PURE__*/React.createElement("div", {
     className: "hint"
-  }, fmtEUR(byStatus[s].value), " investiti")))), alerts.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", {
+  }, fmtEUR(byStatus[s].value), " investiti")))), newCards.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", {
+    className: "section-title new-title"
+  }, "🆕 Nuovi acquisti da revisionare"), /*#__PURE__*/React.createElement("div", {
+    className: "card-list"
+  }, newCards.map(c => /*#__PURE__*/React.createElement(NewCardReview, {
+    key: c.id,
+    card: c,
+    openCard: openCard,
+    onUpdate: onUpdate
+  })))), alerts.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", {
     className: "section-title alert-title"
   }, "⚠️ Allerta prezzo (soglia ", alertThreshold, "%)"), /*#__PURE__*/React.createElement("div", {
     className: "card-list"
@@ -1583,12 +1740,18 @@ function SettingsScreen({
   cards,
   setCards,
   alertThreshold,
-  setAlertThreshold
+  setAlertThreshold,
+  githubToken,
+  setGithubToken,
+  syncStatus,
+  lastSynced,
+  onManualSync
 }) {
   const fileRef = useRef(null);
   const importRef = useRef(null);
   const [importText, setImportText] = useState("");
   const [importMsg, setImportMsg] = useState("");
+  const [tokenInput, setTokenInput] = useState(githubToken);
   function exportBackup() {
     const data = {
       cards,
@@ -1640,7 +1803,10 @@ function SettingsScreen({
           date: new Date().toISOString(),
           value: Number(item.price),
           source: "acquisto"
-        }] : []
+        }] : [],
+        notes: item.notes || "",
+        suggestedDamage: item.damage || [],
+        isNew: true
       }));
       setCards([...cards, ...newCards]);
       setImportMsg(newCards.length + " carte importate.");
@@ -1652,6 +1818,31 @@ function SettingsScreen({
   return /*#__PURE__*/React.createElement("div", {
     className: "screen"
   }, /*#__PURE__*/React.createElement("h3", {
+    className: "section-title"
+  }, "Sincronizzazione PC ↔ cellulare"), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Con un token GitHub i dati si sincronizzano da soli tra i tuoi dispositivi (all'apertura dell'app e a ogni modifica, dopo 2 secondi di pausa) usando il repo pokecollection come archivio. Crea un token su GitHub → Settings → Developer settings → Fine-grained tokens, limitato al solo repo \"pokecollection\", permesso \"Contents: Read and write\"."), /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", null, "Token GitHub"), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    className: "text-input",
+    value: tokenInput,
+    onChange: e => setTokenInput(e.target.value),
+    placeholder: "github_pat_..."
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-actions",
+    style: {
+      justifyContent: "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn-primary",
+    onClick: () => setGithubToken(tokenInput)
+  }, "Salva token"), githubToken && /*#__PURE__*/React.createElement("button", {
+    className: "btn-secondary",
+    onClick: onManualSync
+  }, "Sincronizza ora")), githubToken && /*#__PURE__*/React.createElement("div", {
+    className: "hint sync-status"
+  }, "Stato: ", syncStatus === "syncing" ? "sincronizzazione..." : syncStatus === "error" ? "errore, riprova" : syncStatus === "synced" ? "sincronizzato" : "in attesa del primo sync", lastSynced ? " · ultimo sync " + new Date(lastSynced).toLocaleTimeString("it-IT") : ""), /*#__PURE__*/React.createElement("h3", {
     className: "section-title"
   }, "Soglia allerta prezzo"), /*#__PURE__*/React.createElement("p", {
     className: "hint"
@@ -1720,6 +1911,12 @@ function App() {
   const [screen, setScreen] = useState("home");
   const [selectedId, setSelectedId] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [githubToken, setGithubTokenState] = useState(() => localStorage.getItem(LS.githubToken) || "");
+  const [syncStatus, setSyncStatus] = useState("idle");
+  const [lastSynced, setLastSynced] = useState(() => localStorage.getItem(LS.lastSynced) || "");
+  const shaRef = useRef(null);
+  const applyingRemoteRef = useRef(false);
+  const pushTimerRef = useRef(null);
   useEffect(() => saveCards(cards), [cards]);
   useEffect(() => {
     localStorage.setItem(LS.accent, accent);
@@ -1728,6 +1925,75 @@ function App() {
   useEffect(() => {
     localStorage.setItem(LS.alertThreshold, String(alertThreshold));
   }, [alertThreshold]);
+  function setGithubToken(token) {
+    setGithubTokenState(token);
+    localStorage.setItem(LS.githubToken, token);
+  }
+  function markLastSynced() {
+    const now = new Date().toISOString();
+    setLastSynced(now);
+    localStorage.setItem(LS.lastSynced, now);
+  }
+  async function pushToGithub(token, dataCards, dataAccent) {
+    setSyncStatus("syncing");
+    try {
+      const payload = {
+        cards: dataCards,
+        accent: dataAccent,
+        lastModified: new Date().toISOString()
+      };
+      const sha = await githubPush(token, payload, shaRef.current);
+      shaRef.current = sha;
+      setSyncStatus("synced");
+      markLastSynced();
+    } catch (e) {
+      setSyncStatus("error");
+    }
+  }
+  async function pullFromGithub(token) {
+    setSyncStatus("syncing");
+    try {
+      const {
+        data,
+        sha
+      } = await githubFetch(token);
+      shaRef.current = sha;
+      const localModified = localStorage.getItem(LS.lastModified) || "";
+      if (data && data.lastModified && data.lastModified > localModified) {
+        applyingRemoteRef.current = true;
+        setCardsState(data.cards || []);
+        if (data.accent) setAccentState(data.accent);
+        localStorage.setItem(LS.lastModified, data.lastModified);
+        setSyncStatus("synced");
+        markLastSynced();
+      } else if (!data) {
+        await pushToGithub(token, cards, accent);
+      } else {
+        await pushToGithub(token, cards, accent);
+      }
+    } catch (e) {
+      setSyncStatus("error");
+    }
+  }
+  useEffect(() => {
+    if (githubToken) pullFromGithub(githubToken);
+    // eslint-disable-next-line
+  }, []);
+  useEffect(() => {
+    if (!githubToken) return;
+    if (applyingRemoteRef.current) {
+      applyingRemoteRef.current = false;
+      return;
+    }
+    const now = new Date().toISOString();
+    localStorage.setItem(LS.lastModified, now);
+    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    pushTimerRef.current = setTimeout(() => {
+      pushToGithub(githubToken, cards, accent);
+    }, 2000);
+    return () => clearTimeout(pushTimerRef.current);
+    // eslint-disable-next-line
+  }, [cards, accent]);
   function setCards(next) {
     setCardsState(next);
   }
@@ -1788,14 +2054,20 @@ function App() {
       cards: cards,
       setCards: setCards,
       alertThreshold: alertThreshold,
-      setAlertThreshold: setAlertThresholdState
+      setAlertThreshold: setAlertThresholdState,
+      githubToken: githubToken,
+      setGithubToken: setGithubToken,
+      syncStatus: syncStatus,
+      lastSynced: lastSynced,
+      onManualSync: () => pullFromGithub(githubToken)
     });
   } else {
     body = /*#__PURE__*/React.createElement(HomeScreen, {
       cards: cards,
       openCard: openCard,
       setScreen: setScreen,
-      alertThreshold: alertThreshold
+      alertThreshold: alertThreshold,
+      onUpdate: updateCard
     });
   }
   return /*#__PURE__*/React.createElement("div", {
