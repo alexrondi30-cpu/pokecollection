@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PokéWallet">
-<link rel="manifest" href="manifest.json?v=1786142582130">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786142582130">
-<link rel="icon" href="icon-192.png?v=1786142582130">
+<link rel="manifest" href="manifest.json?v=1786215819909">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786215819909">
+<link rel="icon" href="icon-192.png?v=1786215819909">
 <style>
 :root {
   --accent: #ffcb05;
@@ -51,11 +51,22 @@ html, body {
   top: 0;
   background: var(--bg);
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.app-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  flex-shrink: 0;
 }
 .app-header h1 {
   margin: 0;
   font-size: 20px;
   color: var(--accent);
+  letter-spacing: 0.01em;
 }
 
 .app-main {
@@ -104,6 +115,7 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.15);
 }
 .summary-label { font-size: 12px; color: var(--text-dim); }
 .summary-value { font-size: 20px; font-weight: 700; margin-top: 2px; }
@@ -181,7 +193,9 @@ html, body {
   border-radius: 14px;
   padding: 8px 10px;
   cursor: pointer;
+  transition: border-color 0.15s ease;
 }
+.card-row:active { border-color: var(--accent); }
 .card-row-thumb {
   width: 44px; height: 60px;
   border-radius: 6px;
@@ -275,8 +289,21 @@ textarea.text-input { resize: vertical; font-family: inherit; }
   padding: 8px 10px; font-size: 13px;
 }
 
-.task-row { display: flex; align-items: center; justify-content: space-between; }
+.task-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.task-info { display: flex; flex-direction: column; gap: 2px; }
+.task-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .done-text { text-decoration: line-through; color: var(--text-dim); }
+
+.token-saved-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
 
 .accent-row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
 .accent-dot { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
@@ -324,7 +351,7 @@ textarea.text-input { resize: vertical; font-family: inherit; }
 </head>
 <body>
 <div id="boot-splash">
-  <img src="icon-192.png?v=1786142582130" alt="" class="boot-icon">
+  <img src="icon-192.png?v=1786215819909" alt="" class="boot-icon">
   <div class="boot-title">PokéWallet</div>
 </div>
 <div id="root"></div>
@@ -772,6 +799,14 @@ function newRestoration() {
     tasks: []
   };
 }
+function daysSince(iso) {
+  if (!iso) return 0;
+  return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
+}
+function daysBetween(a, b) {
+  if (!a || !b) return 0;
+  return Math.max(0, Math.floor((new Date(b).getTime() - new Date(a).getTime()) / 86400000));
+}
 function emptyCard() {
   return {
     id: uid(),
@@ -918,7 +953,9 @@ function NewCardReview({
     const tasks = DAMAGE_CHIPS.filter(c => selected.includes(c.key)).map(c => ({
       id: uid(),
       label: c.task,
-      done: false
+      done: false,
+      startedAt: null,
+      completedAt: null
     }));
     onUpdate({
       ...card,
@@ -1164,7 +1201,7 @@ function RestorationScreen({
       className: "card-row-name"
     }, c.name), /*#__PURE__*/React.createElement("div", {
       className: "card-row-meta"
-    }, tasks.map(t => t.label + (t.done ? " ✓" : "")).join(", ") || "Nessuna attività definita")), /*#__PURE__*/React.createElement("div", {
+    }, tasks.map(t => t.label + (t.done ? " ✓" : t.startedAt ? " (" + daysSince(t.startedAt) + "g)" : " · non iniziata")).join(", ") || "Nessuna attività definita")), /*#__PURE__*/React.createElement("div", {
       className: "card-row-value"
     }, /*#__PURE__*/React.createElement("div", {
       className: "value-amount"
@@ -1497,7 +1534,9 @@ function CardDetail({
     const toAdd = DEFAULT_RESTORATION_TASKS.filter(l => !existing.includes(l)).map(l => ({
       id: uid(),
       label: l,
-      done: false
+      done: false,
+      startedAt: null,
+      completedAt: null
     }));
     onUpdate({
       ...card,
@@ -1513,7 +1552,9 @@ function CardDetail({
     const t = {
       id: uid(),
       label: newTask.trim(),
-      done: false
+      done: false,
+      startedAt: null,
+      completedAt: null
     };
     onUpdate({
       ...card,
@@ -1524,10 +1565,40 @@ function CardDetail({
     });
     setNewTask("");
   }
-  function toggleTask(id) {
+  function startTask(id) {
     const tasks = (card.restoration.tasks || []).map(t => t.id === id ? {
       ...t,
-      done: !t.done
+      startedAt: new Date().toISOString()
+    } : t);
+    onUpdate({
+      ...card,
+      restoration: {
+        ...card.restoration,
+        tasks
+      }
+    });
+  }
+  function completeTask(id) {
+    const now = new Date().toISOString();
+    const tasks = (card.restoration.tasks || []).map(t => t.id === id ? {
+      ...t,
+      done: true,
+      startedAt: t.startedAt || now,
+      completedAt: now
+    } : t);
+    onUpdate({
+      ...card,
+      restoration: {
+        ...card.restoration,
+        tasks
+      }
+    });
+  }
+  function reopenTask(id) {
+    const tasks = (card.restoration.tasks || []).map(t => t.id === id ? {
+      ...t,
+      done: false,
+      completedAt: null
     } : t);
     onUpdate({
       ...card,
@@ -1650,18 +1721,31 @@ function CardDetail({
   }, "Aggiungi attività standard"), (card.restoration.tasks || []).map(t => /*#__PURE__*/React.createElement("div", {
     className: "task-row",
     key: t.id
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "checkbox-label"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: t.done,
-    onChange: () => toggleTask(t.id)
-  }), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "task-info"
+  }, /*#__PURE__*/React.createElement("span", {
     className: t.done ? "done-text" : ""
-  }, t.label)), /*#__PURE__*/React.createElement("button", {
+  }, t.label), !t.done && t.startedAt && /*#__PURE__*/React.createElement("div", {
+    className: "hint"
+  }, "In corso da ", daysSince(t.startedAt), " giorni"), t.done && /*#__PURE__*/React.createElement("div", {
+    className: "hint"
+  }, "Completata in ", daysBetween(t.startedAt, t.completedAt), " giorni"), !t.done && !t.startedAt && /*#__PURE__*/React.createElement("div", {
+    className: "hint"
+  }, "Non ancora iniziata")), /*#__PURE__*/React.createElement("div", {
+    className: "task-actions"
+  }, !t.startedAt && !t.done && /*#__PURE__*/React.createElement("button", {
+    className: "btn-secondary",
+    onClick: () => startTask(t.id)
+  }, "Inizia"), t.startedAt && !t.done && /*#__PURE__*/React.createElement("button", {
+    className: "btn-primary",
+    onClick: () => completeTask(t.id)
+  }, "Fatto"), t.done && /*#__PURE__*/React.createElement("button", {
+    className: "btn-secondary",
+    onClick: () => reopenTask(t.id)
+  }, "Riapri"), /*#__PURE__*/React.createElement("button", {
     className: "btn-icon",
     onClick: () => removeTask(t.id)
-  }, "✕"))), /*#__PURE__*/React.createElement("div", {
+  }, "✕")))), /*#__PURE__*/React.createElement("div", {
     className: "search-row"
   }, /*#__PURE__*/React.createElement("input", {
     className: "text-input",
@@ -1752,6 +1836,7 @@ function SettingsScreen({
   const [importText, setImportText] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [tokenInput, setTokenInput] = useState(githubToken);
+  const [editingToken, setEditingToken] = useState(!githubToken);
   function exportBackup() {
     const data = {
       cards,
@@ -1821,7 +1906,15 @@ function SettingsScreen({
     className: "section-title"
   }, "Sincronizzazione PC ↔ cellulare"), /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Con un token GitHub i dati si sincronizzano da soli tra i tuoi dispositivi (all'apertura dell'app e a ogni modifica, dopo 2 secondi di pausa) usando il repo pokecollection come archivio. Crea un token su GitHub → Settings → Developer settings → Fine-grained tokens, limitato al solo repo \"pokecollection\", permesso \"Contents: Read and write\"."), /*#__PURE__*/React.createElement("div", {
+  }, "Con un token GitHub i dati si sincronizzano da soli tra i tuoi dispositivi (all'apertura dell'app e a ogni modifica, dopo 2 secondi di pausa) usando il repo pokecollection come archivio. Crea un token su GitHub → Settings → Developer settings → Fine-grained tokens, limitato al solo repo \"pokecollection\", permesso \"Contents: Read and write\"."), githubToken && !editingToken ? /*#__PURE__*/React.createElement("div", {
+    className: "token-saved-box"
+  }, /*#__PURE__*/React.createElement("span", null, "🔒 Token salvato"), /*#__PURE__*/React.createElement("button", {
+    className: "btn-secondary",
+    onClick: () => {
+      setTokenInput("");
+      setEditingToken(true);
+    }
+  }, "Cambia token")) : /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", null, "Token GitHub"), /*#__PURE__*/React.createElement("input", {
     type: "password",
@@ -1834,10 +1927,15 @@ function SettingsScreen({
     style: {
       justifyContent: "flex-start"
     }
-  }, /*#__PURE__*/React.createElement("button", {
+  }, (!githubToken || editingToken) && /*#__PURE__*/React.createElement("button", {
     className: "btn-primary",
-    onClick: () => setGithubToken(tokenInput)
-  }, "Salva token"), githubToken && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (tokenInput) {
+        setGithubToken(tokenInput);
+        setEditingToken(false);
+      }
+    }
+  }, "Salva token"), githubToken && !editingToken && /*#__PURE__*/React.createElement("button", {
     className: "btn-secondary",
     onClick: onManualSync
   }, "Sincronizza ora")), githubToken && /*#__PURE__*/React.createElement("div", {
@@ -1958,19 +2056,23 @@ function App() {
         sha
       } = await githubFetch(token);
       shaRef.current = sha;
+      if (!data) {
+        // repo non ha ancora un data.json: lo inizializziamo con lo stato locale
+        await pushToGithub(token, cards, accent);
+        return;
+      }
       const localModified = localStorage.getItem(LS.lastModified) || "";
-      if (data && data.lastModified && data.lastModified > localModified) {
+      if (data.lastModified && data.lastModified > localModified) {
         applyingRemoteRef.current = true;
         setCardsState(data.cards || []);
         if (data.accent) setAccentState(data.accent);
         localStorage.setItem(LS.lastModified, data.lastModified);
-        setSyncStatus("synced");
-        markLastSynced();
-      } else if (!data) {
-        await pushToGithub(token, cards, accent);
-      } else {
-        await pushToGithub(token, cards, accent);
       }
+      // se i dati remoti non sono più recenti, non tocchiamo nulla: il pull non deve mai
+      // "spingere indietro" lo stato locale solo perché non ha trovato novità, altrimenti
+      // un dispositivo con dati locali vuoti/vecchi può cancellare dati validi sul server.
+      setSyncStatus("synced");
+      markLastSynced();
     } catch (e) {
       setSyncStatus("error");
     }
@@ -2074,7 +2176,11 @@ function App() {
     className: "app-root"
   }, /*#__PURE__*/React.createElement("header", {
     className: "app-header"
-  }, /*#__PURE__*/React.createElement("h1", null, "PokéWallet")), /*#__PURE__*/React.createElement("main", {
+  }, /*#__PURE__*/React.createElement("img", {
+    src: "icon-192.png",
+    alt: "",
+    className: "app-logo"
+  }), /*#__PURE__*/React.createElement("h1", null, "PokéWallet")), /*#__PURE__*/React.createElement("main", {
     className: "app-main"
   }, body), /*#__PURE__*/React.createElement(BottomNav, {
     screen: screen === "detail" ? "collection" : screen,
