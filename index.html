@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PokéWallet">
-<link rel="manifest" href="manifest.json?v=1786215819909">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786215819909">
-<link rel="icon" href="icon-192.png?v=1786215819909">
+<link rel="manifest" href="manifest.json?v=1786274423326">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=1786274423326">
+<link rel="icon" href="icon-192.png?v=1786274423326">
 <style>
 :root {
   --accent: #ffcb05;
@@ -290,9 +290,13 @@ textarea.text-input { resize: vertical; font-family: inherit; }
 }
 
 .task-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.task-info { display: flex; flex-direction: column; gap: 2px; }
+.task-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .task-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .done-text { text-decoration: line-through; color: var(--text-dim); }
+.task-overdue { color: var(--down); font-weight: 600; }
+.task-start-form { display: flex; gap: 6px; margin-top: 4px; }
+.task-start-form input { width: 60px; padding: 6px 8px; }
+.task-start-form select { width: auto; padding: 6px 8px; }
 
 .token-saved-box {
   display: flex;
@@ -351,7 +355,7 @@ textarea.text-input { resize: vertical; font-family: inherit; }
 </head>
 <body>
 <div id="boot-splash">
-  <img src="icon-192.png?v=1786215819909" alt="" class="boot-icon">
+  <img src="icon-192.png?v=1786274423326" alt="" class="boot-icon">
   <div class="boot-title">PokéWallet</div>
 </div>
 <div id="root"></div>
@@ -807,6 +811,28 @@ function daysBetween(a, b) {
   if (!a || !b) return 0;
   return Math.max(0, Math.floor((new Date(b).getTime() - new Date(a).getTime()) / 86400000));
 }
+function fmtRemaining(dueIso) {
+  const ms = new Date(dueIso).getTime() - Date.now();
+  if (ms <= 0) return "0 ore";
+  const hours = Math.ceil(ms / 3600000);
+  if (hours < 24) return hours + " ore";
+  return Math.ceil(hours / 24) + " giorni";
+}
+function pendingRestorations(cards) {
+  const list = [];
+  cards.forEach(c => {
+    if (c.sold || !c.restoration || !c.restoration.needed) return;
+    (c.restoration.tasks || []).forEach(t => {
+      if (!t.done && t.dueAt && new Date(t.dueAt).getTime() <= Date.now()) {
+        list.push({
+          card: c,
+          task: t
+        });
+      }
+    });
+  });
+  return list;
+}
 function emptyCard() {
   return {
     id: uid(),
@@ -1003,6 +1029,7 @@ function HomeScreen({
     c,
     dp: deltaPct(c)
   })).filter(x => x.dp !== null && Math.abs(x.dp) >= alertThreshold).sort((a, b) => Math.abs(b.dp) - Math.abs(a.dp));
+  const restorationsReady = pendingRestorations(cards);
   const byStatus = {};
   FLIP_STATUS_OPTIONS.forEach(s => {
     byStatus[s] = {
@@ -1079,7 +1106,33 @@ function HomeScreen({
   }, /*#__PURE__*/React.createElement(CardRow, {
     card: c,
     onClick: () => openCard(c.id)
-  }))))), /*#__PURE__*/React.createElement("h3", {
+  }))))), restorationsReady.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", {
+    className: "section-title alert-title"
+  }, "⏰ Restauri pronti"), /*#__PURE__*/React.createElement("div", {
+    className: "card-list"
+  }, restorationsReady.map(({
+    card: c,
+    task
+  }) => /*#__PURE__*/React.createElement("div", {
+    className: "alert-row",
+    key: c.id + task.id,
+    onClick: () => openCard(c.id)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-row"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-row-thumb"
+  }, c.image ? /*#__PURE__*/React.createElement("img", {
+    src: c.image,
+    alt: c.name
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "thumb-placeholder"
+  }, "?")), /*#__PURE__*/React.createElement("div", {
+    className: "card-row-info"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card-row-name"
+  }, c.name), /*#__PURE__*/React.createElement("div", {
+    className: "card-row-meta"
+  }, task.label, " · tempo scaduto"))))))), /*#__PURE__*/React.createElement("h3", {
     className: "section-title"
   }, "Collezione (", active.length, ")"), active.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty-state"
@@ -1493,6 +1546,9 @@ function CardDetail({
   const [saleDate, setSaleDate] = useState(new Date().toISOString().slice(0, 10));
   const [saleChannel, setSaleChannel] = useState("Vinted");
   const [newTask, setNewTask] = useState("");
+  const [startingId, setStartingId] = useState(null);
+  const [durationValue, setDurationValue] = useState("24");
+  const [durationUnit, setDurationUnit] = useState("ore");
   function addPricePoint(value, source) {
     const point = {
       date: new Date().toISOString(),
@@ -1565,10 +1621,15 @@ function CardDetail({
     });
     setNewTask("");
   }
-  function startTask(id) {
+  function confirmStartTask(id) {
+    const hours = durationUnit === "giorni" ? Number(durationValue) * 24 : Number(durationValue);
+    const startedAt = new Date().toISOString();
+    const dueAt = hours > 0 ? new Date(Date.now() + hours * 3600000).toISOString() : null;
     const tasks = (card.restoration.tasks || []).map(t => t.id === id ? {
       ...t,
-      startedAt: new Date().toISOString()
+      startedAt,
+      dueAt,
+      notified: false
     } : t);
     onUpdate({
       ...card,
@@ -1577,6 +1638,9 @@ function CardDetail({
         tasks
       }
     });
+    setStartingId(null);
+    setDurationValue("24");
+    setDurationUnit("ore");
   }
   function completeTask(id) {
     const now = new Date().toISOString();
@@ -1718,34 +1782,60 @@ function CardDetail({
   }, (card.restoration.tasks || []).length === 0 && /*#__PURE__*/React.createElement("button", {
     className: "btn-secondary",
     onClick: addDefaultTasks
-  }, "Aggiungi attività standard"), (card.restoration.tasks || []).map(t => /*#__PURE__*/React.createElement("div", {
-    className: "task-row",
-    key: t.id
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "task-info"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: t.done ? "done-text" : ""
-  }, t.label), !t.done && t.startedAt && /*#__PURE__*/React.createElement("div", {
-    className: "hint"
-  }, "In corso da ", daysSince(t.startedAt), " giorni"), t.done && /*#__PURE__*/React.createElement("div", {
-    className: "hint"
-  }, "Completata in ", daysBetween(t.startedAt, t.completedAt), " giorni"), !t.done && !t.startedAt && /*#__PURE__*/React.createElement("div", {
-    className: "hint"
-  }, "Non ancora iniziata")), /*#__PURE__*/React.createElement("div", {
-    className: "task-actions"
-  }, !t.startedAt && !t.done && /*#__PURE__*/React.createElement("button", {
-    className: "btn-secondary",
-    onClick: () => startTask(t.id)
-  }, "Inizia"), t.startedAt && !t.done && /*#__PURE__*/React.createElement("button", {
-    className: "btn-primary",
-    onClick: () => completeTask(t.id)
-  }, "Fatto"), t.done && /*#__PURE__*/React.createElement("button", {
-    className: "btn-secondary",
-    onClick: () => reopenTask(t.id)
-  }, "Riapri"), /*#__PURE__*/React.createElement("button", {
-    className: "btn-icon",
-    onClick: () => removeTask(t.id)
-  }, "✕")))), /*#__PURE__*/React.createElement("div", {
+  }, "Aggiungi attività standard"), (card.restoration.tasks || []).map(t => {
+    const overdue = t.dueAt && !t.done && new Date(t.dueAt).getTime() <= Date.now();
+    return /*#__PURE__*/React.createElement("div", {
+      className: "task-row",
+      key: t.id
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "task-info"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: t.done ? "done-text" : ""
+    }, t.label), !t.done && t.startedAt && !t.dueAt && /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "In corso da ", daysSince(t.startedAt), " giorni"), !t.done && t.startedAt && t.dueAt && !overdue && /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "In corso · pronta tra ", fmtRemaining(t.dueAt)), !t.done && t.startedAt && t.dueAt && overdue && /*#__PURE__*/React.createElement("div", {
+      className: "hint task-overdue"
+    }, "⏰ Pronta! (tempo scaduto)"), t.done && /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "Completata in ", daysBetween(t.startedAt, t.completedAt), " giorni"), !t.done && !t.startedAt && /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "Non ancora iniziata"), startingId === t.id && /*#__PURE__*/React.createElement("div", {
+      className: "task-start-form"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "1",
+      className: "text-input",
+      value: durationValue,
+      onChange: e => setDurationValue(e.target.value)
+    }), /*#__PURE__*/React.createElement("select", {
+      className: "text-input",
+      value: durationUnit,
+      onChange: e => setDurationUnit(e.target.value)
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "ore"
+    }, "ore"), /*#__PURE__*/React.createElement("option", {
+      value: "giorni"
+    }, "giorni")), /*#__PURE__*/React.createElement("button", {
+      className: "btn-primary",
+      onClick: () => confirmStartTask(t.id)
+    }, "Avvia"))), /*#__PURE__*/React.createElement("div", {
+      className: "task-actions"
+    }, !t.startedAt && !t.done && startingId !== t.id && /*#__PURE__*/React.createElement("button", {
+      className: "btn-secondary",
+      onClick: () => setStartingId(t.id)
+    }, "Inizia"), t.startedAt && !t.done && /*#__PURE__*/React.createElement("button", {
+      className: "btn-primary",
+      onClick: () => completeTask(t.id)
+    }, "Fatto"), t.done && /*#__PURE__*/React.createElement("button", {
+      className: "btn-secondary",
+      onClick: () => reopenTask(t.id)
+    }, "Riapri"), /*#__PURE__*/React.createElement("button", {
+      className: "btn-icon",
+      onClick: () => removeTask(t.id)
+    }, "✕")));
+  }), /*#__PURE__*/React.createElement("div", {
     className: "search-row"
   }, /*#__PURE__*/React.createElement("input", {
     className: "text-input",
@@ -1942,6 +2032,19 @@ function SettingsScreen({
     className: "hint sync-status"
   }, "Stato: ", syncStatus === "syncing" ? "sincronizzazione..." : syncStatus === "error" ? "errore, riprova" : syncStatus === "synced" ? "sincronizzato" : "in attesa del primo sync", lastSynced ? " · ultimo sync " + new Date(lastSynced).toLocaleTimeString("it-IT") : ""), /*#__PURE__*/React.createElement("h3", {
     className: "section-title"
+  }, "Notifiche restauro"), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Quando imposti un tempo di asciugatura/inumidimento su una lavorazione, l'app te lo segnala in home appena scade e, se attivi le notifiche, prova a mandarti un avviso del telefono — ma solo se l'app è aperta (o in background di recente): senza un server dietro, non può svegliarsi da sola a telefono chiuso."), /*#__PURE__*/React.createElement("button", {
+    className: "btn-secondary full-width",
+    onClick: () => {
+      if (typeof Notification === "undefined") {
+        alert("Notifiche non supportate su questo browser.");
+        return;
+      }
+      Notification.requestPermission();
+    }
+  }, typeof Notification !== "undefined" && Notification.permission === "granted" ? "🔔 Notifiche attive" : "Attiva notifiche"), /*#__PURE__*/React.createElement("h3", {
+    className: "section-title"
   }, "Soglia allerta prezzo"), /*#__PURE__*/React.createElement("p", {
     className: "hint"
   }, "Una carta compare nel banner \"Allerta prezzo\" in home solo se il suo valore sale o scende di almeno questa percentuale rispetto all'ultimo controllo. Variazioni più piccole restano visibili solo nella scheda della singola carta, senza avviso."), /*#__PURE__*/React.createElement("div", {
@@ -2015,7 +2118,47 @@ function App() {
   const shaRef = useRef(null);
   const applyingRemoteRef = useRef(false);
   const pushTimerRef = useRef(null);
+  const firstRunRef = useRef(true);
   useEffect(() => saveCards(cards), [cards]);
+  useEffect(() => {
+    function checkOverdueTasks() {
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      let changed = false;
+      const next = cards.map(c => {
+        if (c.sold || !c.restoration || !c.restoration.needed) return c;
+        let cardChanged = false;
+        const tasks = (c.restoration.tasks || []).map(t => {
+          if (!t.done && t.dueAt && !t.notified && new Date(t.dueAt).getTime() <= Date.now()) {
+            try {
+              new Notification("PokéWallet · Restauro pronto", {
+                body: c.name + " — " + t.label
+              });
+            } catch (e) {}
+            cardChanged = true;
+            return {
+              ...t,
+              notified: true
+            };
+          }
+          return t;
+        });
+        if (!cardChanged) return c;
+        changed = true;
+        return {
+          ...c,
+          restoration: {
+            ...c.restoration,
+            tasks
+          }
+        };
+      });
+      if (changed) setCardsState(next);
+    }
+    checkOverdueTasks();
+    const interval = setInterval(checkOverdueTasks, 60000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line
+  }, [cards]);
   useEffect(() => {
     localStorage.setItem(LS.accent, accent);
     document.documentElement.style.setProperty("--accent", accent);
@@ -2083,6 +2226,13 @@ function App() {
   }, []);
   useEffect(() => {
     if (!githubToken) return;
+    if (firstRunRef.current) {
+      // al mount lo stato locale non è ancora stato confrontato col server: non pubblicarlo mai
+      // qui, altrimenti un dispositivo con dati vuoti/vecchi rischia di cancellare quelli remoti
+      // prima ancora che il pull (asincrono) abbia avuto la possibilità di applicarli.
+      firstRunRef.current = false;
+      return;
+    }
     if (applyingRemoteRef.current) {
       applyingRemoteRef.current = false;
       return;
